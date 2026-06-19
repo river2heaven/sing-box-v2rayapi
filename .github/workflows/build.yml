@@ -1,0 +1,166 @@
+# Build sing-box with the V2Ray API service enabled.
+#
+# Why: upstream sing-box official releases are built WITHOUT `with_v2ray_api`, so the
+# V2Ray gRPC StatsService (per-user traffic stats / management) is unavailable in stock
+# binaries. This repo rebuilds the *unmodified* upstream source at each upstream release
+# tag, adding only the `with_v2ray_api` build tag on top of the official tag set, and
+# publishes per-arch binaries as GitHub releases (jsdelivr-friendly).
+#
+# Trigger model (GitHub Actions CANNOT be triggered by another repo's release event —
+# there is no cross-repo release webhook, so we POLL):
+#   - schedule (cron): daily check of upstream latest stable release
+#   - workflow_dispatch: manual (optional `version` input to build a specific tag)
+#   - repository_dispatch [type: upstream-release]: optional low-latency trigger from an
+#     external watcher subscribed to https://github.com/SagerNet/sing-box/releases.atom
+name: Build sing-box (v2ray_api)
+
+on:
+  schedule:
+    - cron: '23 5 * * *'      # daily 05:23 UTC — poll upstream latest stable
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'sing-box version to build (e.g. 1.13.12 or v1.13.12). Blank = upstream latest stable.'
+        required: false
+        default: ''
+  repository_dispatch:
+    types: [upstream-release]
+
+permissions:
+  contents: write             # create releases
+
+concurrency:
+  group: singbox-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: SagerNet/sing-box
+  # Official release tag set (sing-box Makefile / .goreleaser.yaml) + our single addition: with_v2ray_api.
+  BUILD_TAGS: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_v2ray_api
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.r.outputs.version }}
+      should_build: ${{ steps.r.outputs.should_build }}
+    steps:
+      - id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          INPUT='${{ github.event.inputs.version }}'
+          if [ -n "$INPUT" ]; then
+            VER="${INPUT#v}"
+          else
+            # GitHub "latest" excludes pre-releases → tracks stable only (don't auto-ship alphas).
+            VER="$(gh api "repos/${UPSTREAM}/releases/latest" --jq '.tag_name')"
+            VER="${VER#v}"
+          fi
+          if [ -z "$VER" ]; then echo "::error::could not resolve upstream version"; exit 1; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          # Idempotency: skip if we already published this version.
+          if gh release view "v$VER" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$VER already released — nothing to do."
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::will build sing-box v$VER (tags: ${BUILD_TAGS})"
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - name: Checkout upstream sing-box source @ tag
+        run: |
+          set -euo pipefail
+          VER='${{ needs.resolve.outputs.version }}'
+          git clone --depth 1 -b "v${VER}" "https://github.com/${UPSTREAM}.git" src
+      - name: Build (unmodified source, official tags + with_v2ray_api)
+        working-directory: src
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          VER='${{ needs.resolve.outputs.version }}'
+          go build -v -trimpath \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VER}' -s -w -buildid=" \
+            -tags "${BUILD_TAGS}" \
+            -o "../sing-box" ./cmd/sing-box
+      - name: Verify v2ray_api is actually compiled in
+        run: |
+          set -euo pipefail
+          # sanity: the binary must contain the v2ray stats service symbol/string.
+          # (cross-arch binary: grep its strings, don't execute arm64 on amd64 runner)
+          if ! strings ./sing-box | grep -qi 'v2ray.core.app.stats.command'; then
+            echo "::error::built binary lacks V2Ray StatsService — with_v2ray_api not effective!"
+            exit 1
+          fi
+      - name: Package + checksum
+        run: |
+          set -euo pipefail
+          VER='${{ needs.resolve.outputs.version }}'; ARCH='${{ matrix.goarch }}'
+          name="sing-box-${VER}-linux-${ARCH}"
+          mkdir -p "out/${name}"
+          cp ./sing-box "out/${name}/sing-box"
+          tar -C out -czf "out/${name}.tar.gz" "${name}"
+          ( cd out && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
+      - name: Sign (minisign, if key present)
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VER='${{ needs.resolve.outputs.version }}'; ARCH='${{ matrix.goarch }}'
+          name="sing-box-${VER}-linux-${ARCH}"
+          if [ -z "${MINISIGN_PRIVATE_KEY:-}" ]; then
+            echo "::warning::MINISIGN_PRIVATE_KEY not set — publishing without signature (sha256 only). Set the secret to enable signing."
+            exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          printf '%s\n' "$MINISIGN_PRIVATE_KEY" > minisign.key
+          printf '%s\n' "${MINISIGN_PASSWORD:-}" | minisign -S -s minisign.key -m "out/${name}.tar.gz"
+          rm -f minisign.key
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goarch }}
+          path: out/sing-box-*-linux-${{ matrix.goarch }}.tar.gz*
+          retention-days: 1
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create / update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VER='${{ needs.resolve.outputs.version }}'
+          notes="Unmodified upstream [sing-box v${VER}](https://github.com/SagerNet/sing-box/releases/tag/v${VER}) rebuilt with the official release tag set **plus \`with_v2ray_api\`** (enables the V2Ray gRPC StatsService missing from stock releases).
+
+          Build tags: \`${BUILD_TAGS}\`
+          Arches: linux/amd64, linux/arm64. Verify with the \`.sha256\` (and \`.minisig\` if present)."
+          gh release create "v${VER}" dist/* \
+            -R "$GITHUB_REPOSITORY" \
+            --title "sing-box v${VER} (v2ray_api)" \
+            --notes "$notes" || \
+          gh release upload "v${VER}" dist/* -R "$GITHUB_REPOSITORY" --clobber
