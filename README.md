@@ -28,17 +28,24 @@ Each release matches an upstream sing-box version tag (`vX.Y.Z`). Assets per rel
 | `sing-box-<ver>-linux-amd64.tar.gz` (+ `.sha256`, `.minisig`) | linux/amd64 binary |
 | `sing-box-<ver>-linux-arm64.tar.gz` (+ `.sha256`, `.minisig`) | linux/arm64 binary |
 
-Direct (GitHub release): `https://github.com/<owner>/<repo>/releases/latest`
+Latest release: <https://github.com/river2heaven/sing-box-v2rayapi/releases/latest>
 
-Via jsdelivr CDN (good for restricted networks):
+Direct asset download:
 ```
-https://cdn.jsdelivr.net/gh/<owner>/<repo>@v<ver>/...   # (release assets are served from the release, see Releases tab)
+https://github.com/river2heaven/sing-box-v2rayapi/releases/download/v<ver>/sing-box-<ver>-linux-amd64.tar.gz
+```
+
+On restricted networks, the binaries are GitHub **release assets** (not committed files), so a
+jsdelivr `/gh/…` URL will **not** serve them — fetch the same release URL through a GitHub
+download proxy/mirror (a `ghproxy`-style service):
+```
+https://<github-proxy>/https://github.com/river2heaven/sing-box-v2rayapi/releases/download/v<ver>/sing-box-<ver>-linux-amd64.tar.gz
 ```
 
 Verify before use:
 ```bash
 sha256sum -c sing-box-<ver>-linux-amd64.tar.gz.sha256
-minisign -Vm sing-box-<ver>-linux-amd64.tar.gz -P <minisign-public-key>   # if signed
+minisign -Vm sing-box-<ver>-linux-amd64.tar.gz -P <minisign-public-key>   # once signing is enabled
 ```
 
 ## How auto-tracking works
