@@ -30,16 +30,9 @@ Each release matches an upstream sing-box version tag (`vX.Y.Z`). Assets per rel
 
 Latest release: <https://github.com/river2heaven/sing-box-v2rayapi/releases/latest>
 
-Direct asset download:
+Download a specific asset:
 ```
 https://github.com/river2heaven/sing-box-v2rayapi/releases/download/v<ver>/sing-box-<ver>-linux-amd64.tar.gz
-```
-
-On restricted networks, the binaries are GitHub **release assets** (not committed files), so a
-jsdelivr `/gh/…` URL will **not** serve them — fetch the same release URL through a GitHub
-download proxy/mirror (a `ghproxy`-style service):
-```
-https://<github-proxy>/https://github.com/river2heaven/sing-box-v2rayapi/releases/download/v<ver>/sing-box-<ver>-linux-amd64.tar.gz
 ```
 
 Verify before use:
