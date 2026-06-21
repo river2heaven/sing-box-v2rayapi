@@ -38,7 +38,13 @@ https://github.com/river2heaven/sing-box-v2rayapi/releases/download/v<ver>/sing-
 Verify before use:
 ```bash
 sha256sum -c sing-box-<ver>-linux-amd64.tar.gz.sha256
-minisign -Vm sing-box-<ver>-linux-amd64.tar.gz -P <minisign-public-key>   # once signing is enabled
+# minisign signature (recommended): public key is in minisign.pub (key ID 2EC45A4A4FB31B2A)
+minisign -Vm sing-box-<ver>-linux-amd64.tar.gz -P RWQqG7NPSlrELtbB3OOjGwLo/9Sn8y436071SbKqijrMPFpmqCcXWX1U
+```
+
+**Signing public key** (minisign, key ID `2EC45A4A4FB31B2A`) — also committed as [`minisign.pub`](minisign.pub):
+```
+RWQqG7NPSlrELtbB3OOjGwLo/9Sn8y436071SbKqijrMPFpmqCcXWX1U
 ```
 
 ## How auto-tracking works
@@ -52,10 +58,10 @@ release webhook exists). So this repo **polls**:
 
 ## Maintenance
 
-- **Signing**: set repo secrets `MINISIGN_PRIVATE_KEY` (and `MINISIGN_PASSWORD` if the key is
-  password-protected) to enable `.minisig` signatures. Without them, releases ship with
-  `.sha256` only (the workflow warns, doesn't fail). Publish the matching minisign **public**
-  key here so consumers can verify.
+- **Signing**: **enabled** — releases are signed with minisign (key ID `2EC45A4A4FB31B2A`,
+  public key in [`minisign.pub`](minisign.pub)). Signing uses repo secrets `MINISIGN_PRIVATE_KEY`
+  + `MINISIGN_PASSWORD` (password-protected key). If those secrets are ever removed, the workflow
+  falls back to `.sha256`-only (warns, doesn't fail).
 - **First run / backfill**: `Actions → Build sing-box (v2ray_api) → Run workflow` (leave
   `version` blank for upstream latest, or pin a specific tag).
 - **Schedule keep-alive**: GitHub disables scheduled workflows after 60 days of repo
