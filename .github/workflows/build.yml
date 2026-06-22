@@ -119,7 +119,7 @@ jobs:
           cp ./sing-box "out/${name}/sing-box"
           tar -C out -czf "out/${name}.tar.gz" "${name}"
           ( cd out && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
-      - name: Sign (minisign, if key present)
+      - name: Sign (minisign, required)
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
@@ -127,14 +127,17 @@ jobs:
           set -euo pipefail
           VER='${{ needs.resolve.outputs.version }}'; ARCH='${{ matrix.goarch }}'
           name="sing-box-${VER}-linux-${ARCH}"
+          # Signing is a required supply-chain gate — fail-closed, never publish unsigned.
           if [ -z "${MINISIGN_PRIVATE_KEY:-}" ]; then
-            echo "::warning::MINISIGN_PRIVATE_KEY not set — publishing without signature (sha256 only). Set the secret to enable signing."
-            exit 0
+            echo "::error::MINISIGN_PRIVATE_KEY not set — signing is required; refusing to publish unsigned. Set the secret."
+            exit 1
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
           printf '%s\n' "$MINISIGN_PRIVATE_KEY" > minisign.key
           printf '%s\n' "${MINISIGN_PASSWORD:-}" | minisign -S -s minisign.key -m "out/${name}.tar.gz"
           rm -f minisign.key
+          # Catch silent signing failure: the signature artifact must exist.
+          test -f "out/${name}.tar.gz.minisig" || { echo "::error::minisig missing after signing ${name}.tar.gz"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.goarch }}
@@ -149,6 +152,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Assert every tarball signed + checksummed (fail-closed)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tars=(dist/sing-box-*-linux-*.tar.gz)
+          [ ${#tars[@]} -gt 0 ] || { echo "::error::no tar.gz artifacts found"; exit 1; }
+          for t in "${tars[@]}"; do
+            [ -f "$t.sha256" ]  || { echo "::error::$t missing .sha256"; exit 1; }
+            [ -f "$t.minisig" ] || { echo "::error::$t missing .minisig — refusing to publish unsigned asset"; exit 1; }
+          done
+          echo "✓ all ${#tars[@]} tarball(s) carry both .sha256 and .minisig"
       - name: Create / update release
         env:
           GH_TOKEN: ${{ github.token }}
